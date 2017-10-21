@@ -1,24 +1,33 @@
 ### Newtopia figures #####
-library(tidyr)
-library(dplyr)
-library(ggplot2)
-library(lattice)
-library(lme4)
-
+library(tidyverse) # for data manipulation and plotting
+library(lme4) # for modeling functions 
+se <- function(x) {sd(x,na.rm=TRUE)/sqrt(length(x))} # creating standard error function
 
 ## Imputting data
-setwd("/Users/travismcdevitt-galles/Desktop/Current_Projects/Newtopia")
+setwd("/Users/travismcdevitt-galles/Desktop/Current_Projects/Newtopia/Newtopia_figures")
 
 raw.df <- read.csv("newtopia.csv")
 
-names(raw.df)
 
 newt.df <- raw.df[complete.cases(raw.df$ttx_cm2),] ## removes all rows with NAs
 
-## Figure 3, Violin plot of Newt TTX data between species
+
+newt.tib <- as.tibble(newt.df) #transform the data frame to a tibble file 
+                                # better for tidyverse functions
+
+newt.tib <- filter(newt.tib, state =="CA") # subsetting for only California newts
 
 
-ttx.dist.log <- ggplot(newt.df, aes(y=log10(ttx_cm2), x = species, fill=species)) + 
+
+## Figure 1, Violin plot of Newt TTX data between species not adujsted for site 
+## effects
+
+ttx.tib <- newt.tib %>%
+                filter(ttx_cm2 > 0 ) %>%
+                select( species, site, ttx_cm2)
+
+
+ttx.dist.log <- ggplot(ttx.tib, aes(y=log10(ttx_cm2), x = species, fill=species)) + 
     geom_violin(scale = "width") + 
     ylab(expression(TTX~concentration~log["10"](ng~cm^{"-2"}))) + theme_classic()
 
@@ -33,34 +42,43 @@ ttx.dist.log <- ttx.dist.log + theme(axis.title.x = element_text(size = rel(1.8)
                      legend.position = 'none') + xlab("Species")
     
     
-ttx.dist.log
+ttx.dist.log 
 
 
 ## Figure 1 but with adjustments based on random site effects
 
-at1 <- lmer(log10(ttx_cm2+1) ~ 1 + (1|site) , data=newt.df)
-at1
- 
-summary(at1)
-site.effect <- ranef(at1)
+## model for site level adjustment for ttx levels
 
-site <- as.factor(row.names(site.effect$site))
-effect <- as.numeric(site.effect$site$`(Intercept)`)
-site.effect.df <- cbind.data.frame(site,effect)
+ttx.tib$logTTX <- log10(ttx.tib$ttx_cm2)
 
-vio.df <- newt.df[,c(7,11,52)]
+ttx.m <- lmer( logTTX ~ 1 + ( 1|site ) , data=ttx.tib ) # model to obtain site 
+                                                        # adjustments
 
-vio.df$logTTX <- log10(vio.df$ttx_cm2 + 1)
+site.effect <- ranef( ttx.m )  # extracting site level adjustmets
 
-vio.df <- plyr::join ( vio.df , site.effect.df, by="site" )
+site <- as.factor(row.names(site.effect$site)) # pulling assorted site names
 
-vio.df$adjTTX <- vio.df$logTTX + vio.df$effect
+effect <- as.numeric(site.effect$site$`(Intercept)`) # pulling the adjustments
 
-vio.df  <- vio.df[-304,]
+site.effect.df <- cbind.data.frame(site,effect) # creating new df frame for
+                                                # site level adjustments
 
-ttx.dist.adj <- ggplot(vio.df, aes(y=adjTTX, x = species, fill=species)) + 
-    geom_violin(scale = "width") + 
-    ylab(expression(TTX~concentration~log["10"](ng~cm^{"-2"}))) + theme_classic()
+
+
+vio.tib <- right_join( ttx.tib , site.effect.df, by="site" ) # new tibble for 
+                                                            # violin plots with
+                                                            # the new site level
+                                                            # adjustments
+
+vio.tib$adjTTX <- vio.tib$logTTX + vio.tib$effect # creating new adjusted
+                                                  # ttx variables
+
+
+# Building the ggplot
+ttx.dist.adj <- ggplot( vio.tib, aes (y=adjTTX, x = species, fill=species  ) ) + 
+    geom_violin( scale = "width" ) + 
+    ylab(expression( TTX~concentration~log["10"](ng~cm^{"-2"}))) + 
+        theme_classic()
 
 ttx.dist.adj <- ttx.dist.adj + theme(axis.title.x = element_text(size = rel(1.8)),
                                      axis.text.x  = element_text(vjust=0.5, size=16),
@@ -73,13 +91,99 @@ ttx.dist.adj <- ttx.dist.adj + theme(axis.title.x = element_text(size = rel(1.8)
                                      legend.position = 'none') + xlab("Species")
 
 
-ttx.dist.log
-ttx.dist.adj
+ttx.dist.log # ttx between species without site level adjustments
+ttx.dist.adj # ttx between species with site level adjustments 
+
+## figure 1 b, TAGR site level variation in ttx levels 
+## 
+
+# building a new data frame for tagr values
+tagr.tib <- ttx.tib %>% 
+            filter( species == "TAGR" ) %>%
+            group_by(species, site ) %>%
+            summarise(
+                nInd = n() , 
+                mean.ttx = mean(logTTX),
+                se.ttx = se(logTTX)
+            ) %>%
+            filter( nInd > 1)
+
+
+tagr.site <- ggplot(tagr.tib,aes( x= reorder( site , -mean.ttx), y = mean.ttx,
+                                  fill = species)) + 
+    geom_bar(stat="identity",position="dodge") + theme_classic()
+
+tagr.site <- tagr.site + geom_errorbar( aes( ymin = mean.ttx ,
+                                ymax= (mean.ttx + se.ttx) ),
+                           width=0)
+tagr.site <-  tagr.site +   
+ ylab(expression( Mean~site~level~TTX~concentration~log["10"](ng~cm^{"-2"}))) 
+
+tagr.site + theme(axis.title.x = element_text(size = rel(1.8)),
+                  axis.text.x  = element_blank(),
+                  axis.title.y = element_text(size = rel(1.8)),
+                  axis.text.y  = element_text(vjust=0.5, size=16),
+                  axis.line.x = element_line(color="black") ,
+                  axis.line.y = element_line(color="black"),
+                  axis.ticks.y = element_line(color="black"),
+                  axis.ticks.x = element_line(color="black"),
+                  legend.position = 'none') +
+            xlab( expression( paste(
+                            italic("Taricha granulosa")," sites" )  ) )
 
 
 
+## TAGR plot but for centered ttx values, shows the variation a bit better
+tagr.tib$cent. <- tagr.tib$mean.ttx - mean(tagr.tib$mean.ttx)
 
 
+tagr.site.cent <- ggplot(tagr.tib,aes( x= reorder( site , -cent.), y = cent.,
+                                  fill= species)) + 
+    geom_bar(stat="identity",position="dodge")
+
+tagr.site.cent <- tagr.site.cent + geom_errorbar( aes( ymin = (cent. -se.ttx ) ,
+                                ymax= (cent. + se.ttx) ),
+                           width=0) + theme_classic()
+tagr.site.cent <-  tagr.site.cent +   
+    ylab(expression( Centered~mean~site~level~TTX~concentration~log["10"](ng~cm^{"-2"}))) 
+
+tagr.site.cent +theme(axis.title.x = element_text(size = rel(1.8)),
+                      axis.text.x  = element_blank(),
+                      axis.title.y = element_text(size = rel(1.25)),
+                      axis.text.y  = element_text(vjust=0.5, size=16),
+                      axis.line.x = element_line(color="black") ,
+                      axis.line.y = element_line(color="black"),
+                      axis.ticks.y = element_line(color="black"),
+                      axis.ticks.x = element_line(color="black"),
+                      legend.position = 'none') +
+    xlab( expression( paste(
+        italic("Taricha granulosa")," sites" )  ) )
+
+
+
+# building a new data frame for tato values
+tato.tib <- ttx.tib %>% 
+    filter( species == "TATO" ) %>%
+    group_by(species, site ) %>%
+    summarise(
+        nInd = n() , 
+        mean.ttx = mean((logTTX)),
+        se.ttx = se((logTTX))) %>%
+    filter( nInd > 1)
+
+tato.tib$cent. <- tato.tib$mean.ttx - mean(tato.tib$mean.ttx)
+tato.site <- ggplot(tato.tib,aes( x= reorder( site , -cent.), y = cent.,
+                                  fill= species)) + 
+    geom_bar(stat="identity",position="dodge")
+
+tato.site + geom_errorbar( aes( ymin = (cent. -se.ttx ) ,
+                                ymax= (cent. + se.ttx) ),
+                           width=0) + theme_classic()
+
+tat
+
+
+## Figure 3
 
 newt.df$sSVL <- (newt.df$svl - mean(newt.df$svl))/sd(newt.df$svl)
 
@@ -88,8 +192,6 @@ newt.df <- raw.df[complete.cases(raw.df$ttx_cm2),]
 newt.df$sTTX <- (log10(newt.df$ttx_cm2+1) - mean(log10(newt.df$ttx_cm2+1)))/sd(log10(newt.df$ttx_cm2+1))
 
 
-
-newt.df <- newt.df[-304,]
 
 newt.df$LogTTX <- log10(newt.df$ttx_cm2 )
 
